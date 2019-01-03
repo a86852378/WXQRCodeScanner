@@ -31,29 +31,34 @@ static CGFloat const kScanLineHeight = 12.f;
 
 @implementation WXQRCodeScannerView
 
-#pragma mark - Override Method -
-- (void)drawRect:(CGRect)rect {
+#pragma mark - Init
+- (instancetype)initWithFrame:(CGRect)frame delegate:(id)delegate {
+    if (self = [super initWithFrame:frame]) {
+        self.delegate = delegate;
 
-    // calculate the rect of the effective area
-    CGRect scanWindowRect = CGRectInset(rect, kMinSpaceToBorder, kMinSpaceToBorder);
-    CGFloat minSideLength = MIN(scanWindowRect.size.width, scanWindowRect.size.height);
-    if (minSideLength == scanWindowRect.size.width) {
-        scanWindowRect.origin.y += (scanWindowRect.size.height - minSideLength) / 2 - 30;
-        scanWindowRect.size.height = minSideLength;
-    } else if (minSideLength == rect.size.height) {
-        scanWindowRect.origin.x += (scanWindowRect.size.width - minSideLength) / 2 - 30;
-        scanWindowRect.size.width = minSideLength;
+        // calculate the rect of the effective area
+        CGRect scanWindowRect = CGRectInset(frame, kMinSpaceToBorder, kMinSpaceToBorder);
+        CGFloat minSideLength = MIN(scanWindowRect.size.width, scanWindowRect.size.height);
+        if (minSideLength == scanWindowRect.size.width) {
+            scanWindowRect.origin.y += (scanWindowRect.size.height - minSideLength) / 2 - 30;
+            scanWindowRect.size.height = minSideLength;
+        } else if (minSideLength == frame.size.height) {
+            scanWindowRect.origin.x += (scanWindowRect.size.width - minSideLength) / 2 - 30;
+            scanWindowRect.size.width = minSideLength;
+        }
+        self.scanWindowRect = scanWindowRect;
+
+        if ([self.delegate respondsToSelector:@selector(loadView:)]) {
+            [self.delegate loadView:scanWindowRect];
+        }
+
+        [self setupScanWindowBorderLayer:scanWindowRect];
+        [self setupAreaLayerAroundScanWindow:scanWindowRect];
+        [self setupImageSubview:scanWindowRect];
     }
-    self.scanWindowRect = scanWindowRect;
-
-    if ([self.delegate respondsToSelector:@selector(loadView:)]) {
-        [self.delegate loadView:scanWindowRect];
-    }
-
-    [self setupScanWindowBorderLayer:scanWindowRect];
-    [self setupAreaLayerAroundScanWindow:scanWindowRect];
-    [self setupImageSubview:scanWindowRect];
+    return self;
 }
+
 
 #pragma mark - Private Method -
 - (void)setupScanWindowBorderLayer:(CGRect)rect {

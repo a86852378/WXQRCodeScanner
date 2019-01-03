@@ -22,6 +22,10 @@
 
 @interface WXQRCodeScannerView : UIView
 
+
+- (instancetype)initWithFrame:(CGRect)frame delegate:(id)delegate;
+
+
 @property (nonatomic, weak) id <WXQRCodeScannerViewDelegate> delegate;
 
 /**

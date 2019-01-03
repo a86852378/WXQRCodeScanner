@@ -13,6 +13,11 @@
 
 static CGFloat const kButtonWidthAndHeight = 35.f;
 
+typedef NS_ENUM(NSInteger, ScannerSourceDeviceType) {
+    ScannerSourceDeviceCamera,
+    ScannerSourceDevicePhotoLibrary
+};
+
 @interface WXQRCodeScannerViewController () <WXQRCodeScannerViewDelegate, AVCaptureMetadataOutputObjectsDelegate, UINavigationControllerDelegate, UIImagePickerControllerDelegate>
 
 @property (nonatomic, strong) UIButton *backButton;
@@ -44,13 +49,12 @@ static CGFloat const kButtonWidthAndHeight = 35.f;
 /// the property is used to judge if it is processing the scanning result
 @property (nonatomic, assign, getter=isHandleResult) BOOL handleResult;
 
-/// the property is used to judge if the media components is completed
-@property (nonatomic, assign, getter=isCompleteSetupMedia) BOOL completeSetupMedia;
 
+- (void)configSubviews;
 
-- (void)setupSubviews;
+- (void)requestAuthorizationWithType:(ScannerSourceDeviceType)type completion:(void(^)(BOOL granted))completion;
 
-- (void)setupMediaComponents;
+- (void)configMediaComponents;
 
 - (void)startScanning;
 
@@ -61,13 +65,13 @@ static CGFloat const kButtonWidthAndHeight = 35.f;
 
 @implementation WXQRCodeScannerViewController
 
-#pragma mark - Life Cycle -
+#pragma mark - Life Cycle
 - (void)viewDidLoad {
     [super viewDidLoad];
+    self.view.backgroundColor = [UIColor blackColor];
 
     self.handleResult = NO;
-    self.completeSetupMedia = NO;
-    [self setupSubviews];
+    [self configSubviews];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -79,80 +83,163 @@ static CGFloat const kButtonWidthAndHeight = 35.f;
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
 
-    [self startScanning];
-    if (!self.isCompleteSetupMedia) {
-        AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
-        switch (status) {
-            case AVAuthorizationStatusNotDetermined:{
-                [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo completionHandler:^(BOOL granted) {
-                    if (granted) {
-                        dispatch_sync(dispatch_get_main_queue(), ^{
-                            [self setupMediaComponents];
-                        });
-                    }
-                }];
-                break;
-            }
-            case AVAuthorizationStatusAuthorized:{
-                [self setupMediaComponents];
-                break;
-            }
-            case AVAuthorizationStatusDenied:
-            case AVAuthorizationStatusRestricted:
-                break;
+    [self requestAuthorizationWithType:ScannerSourceDeviceCamera completion:^(BOOL granted) {
+        if (granted) {
+            [self configMediaComponents];
+            [self startScanning];
         }
-        self.completeSetupMedia = YES;
-    }
+    }];
 }
 
-#pragma mark - Override Method -
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+
+    [self stopScanning];
+}
+
+#pragma mark - Override Method
 - (UIStatusBarStyle)preferredStatusBarStyle {
     return UIStatusBarStyleLightContent;
 }
 
-#pragma mark - Private Method -
-- (void)setupSubviews {
-    self.scannerView = [[WXQRCodeScannerView alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    self.scannerView.delegate = self;
+#pragma mark - Private Method
+- (void)configSubviews {
+    self.scannerView = [[WXQRCodeScannerView alloc] initWithFrame:[UIScreen mainScreen].bounds delegate:self];
     [self.view addSubview:self.scannerView];
     [self.view addSubview:self.backButton];
     [self.view addSubview:self.localPhotoButton];
     [self.view addSubview:self.lightButton];
 }
 
-- (void)setupMediaComponents {
-    self.cameraDevice = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
-    self.cameraDeviceInput = [AVCaptureDeviceInput deviceInputWithDevice:self.cameraDevice error:nil];
-    self.metadataOutput = [[AVCaptureMetadataOutput alloc] init];
-    [self.metadataOutput setMetadataObjectsDelegate:self queue:dispatch_get_main_queue()];
-    self.session = [[AVCaptureSession alloc] init];
-    if (self.cameraDeviceInput) {
-        [self.session addInput:self.cameraDeviceInput];
+- (void)requestAuthorizationWithType:(ScannerSourceDeviceType)type completion:(void (^)(BOOL))completion {
+    switch (type) {
+        case ScannerSourceDeviceCamera: {
+            AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
+            switch (status) {
+                case AVAuthorizationStatusNotDetermined: {
+                    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo completionHandler:^(BOOL granted) {
+                        if (granted) {
+                            dispatch_sync(dispatch_get_main_queue(), ^{
+                                completion(YES);
+                            });
+                        }
+                    }];
+                    break;
+                }
+                case AVAuthorizationStatusAuthorized: {
+                    completion(YES);
+                    break;
+                }
+                case AVAuthorizationStatusDenied:
+                case AVAuthorizationStatusRestricted:
+                    completion(NO);
+                    break;
+            }
+        }
+            break;
+        case ScannerSourceDevicePhotoLibrary: {
+            PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatus];
+            switch (status) {
+                case PHAuthorizationStatusNotDetermined:{
+                    [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus status) {
+                        if (status == PHAuthorizationStatusAuthorized) {
+                            dispatch_sync(dispatch_get_main_queue(), ^{
+                                completion(YES);
+                            });
+                        } else{
+                        }
+                    }];
+                    break;
+                }
+                case PHAuthorizationStatusAuthorized: {
+                    completion(YES);
+                }
+                    break;
+                case PHAuthorizationStatusDenied:
+                case PHAuthorizationStatusRestricted:
+                    completion(NO);
+                    break;
+            }
+        }
+            break;
+        default:
+            break;
     }
-    if (self.metadataOutput) {
-        [self.session addOutput:self.metadataOutput];
+
+}
+
+- (void)configMediaComponents {
+    if (_cameraDevice &&
+        _cameraDeviceInput &&
+        _metadataOutput &&
+        _session &&
+        _previewLayer) {
+        return;
     }
-    if ([self.session canSetSessionPreset:AVCaptureSessionPreset1920x1080]) {
-        [self.session setSessionPreset:AVCaptureSessionPreset1920x1080];
-    } else {
-        [self.session setSessionPreset:AVCaptureSessionPreset1280x720];
+
+    _cameraDevice = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+    if (!_cameraDevice) {
+        return;
     }
-    [self.metadataOutput setMetadataObjectTypes:@[AVMetadataObjectTypeQRCode]];
-    self.previewLayer = [AVCaptureVideoPreviewLayer layerWithSession:self.session];
+
+    _cameraDeviceInput = [AVCaptureDeviceInput deviceInputWithDevice:self.cameraDevice error:nil];
+    if (!_cameraDeviceInput) {
+        return;
+    }
+
+    _metadataOutput = [[AVCaptureMetadataOutput alloc] init];
+    [_metadataOutput setMetadataObjectsDelegate:self queue:dispatch_get_main_queue()];
+
+    _session = [[AVCaptureSession alloc] init];
+    [_session setSessionPreset:AVCaptureSessionPresetHigh];
+
+    if ([_session canAddInput:_cameraDeviceInput]) {
+        [_session addInput:_cameraDeviceInput];
+    }
+    if ([_session canAddOutput:_metadataOutput]) {
+        [_session addOutput:_metadataOutput];
+    }
+
+    // Choose types what you need
+    [self.metadataOutput setMetadataObjectTypes:@[AVMetadataObjectTypeQRCode
+//                                                  AVMetadataObjectTypeUPCECode,
+//                                                  AVMetadataObjectTypeCode39Code,
+//                                                  AVMetadataObjectTypeCode39Mod43Code,
+//                                                  AVMetadataObjectTypeEAN13Code,
+//                                                  AVMetadataObjectTypeEAN8Code,
+//                                                  AVMetadataObjectTypeCode93Code,
+//                                                  AVMetadataObjectTypeCode128Code,
+//                                                  AVMetadataObjectTypePDF417Code,
+//                                                  AVMetadataObjectTypeAztecCode,
+//                                                  AVMetadataObjectTypeInterleaved2of5Code,
+//                                                    AVMetadataObjectTypeITF14Code,
+//                                                    AVMetadataObjectTypeDataMatrixCode
+                                                  ]];
+    _previewLayer = [AVCaptureVideoPreviewLayer layerWithSession:_session];
     // the method startRunning and stopRunning need to be executed in the child thread, or they will block the main thread
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        [self.session startRunning];
-    });
-    [self.previewLayer setVideoGravity:AVLayerVideoGravityResizeAspectFill];
-    [self.previewLayer setFrame:self.scannerView.bounds];
-    [self.scannerView.layer insertSublayer:self.previewLayer atIndex:0];
+    [_previewLayer setVideoGravity:AVLayerVideoGravityResizeAspectFill];
+    [_previewLayer setFrame:self.scannerView.frame];
+    [self.scannerView.layer insertSublayer:_previewLayer atIndex:0];
+
+    // judge if the the device support auto focus, if yes, open the auto focus so that it is easier to extract QR code
+    if (_cameraDevice.isFocusPointOfInterestSupported &&[_cameraDevice isFocusModeSupported:AVCaptureFocusModeAutoFocus])
+    {
+        [_cameraDeviceInput.device lockForConfiguration:nil];
+        [_cameraDeviceInput.device setFocusMode:AVCaptureFocusModeContinuousAutoFocus];
+        [_cameraDeviceInput.device unlockForConfiguration];
+    }
 
     NSString *filePath = [[NSBundle mainBundle] pathForResource:@"beep" ofType:@"wav"];
     NSData *data = [[NSData alloc] initWithContentsOfFile:filePath];
-    self.beepPlayer = [[AVAudioPlayer alloc] initWithData:data error:nil];
+    _beepPlayer = [[AVAudioPlayer alloc] initWithData:data error:nil];
 }
 
 - (void)startScanning {
+    if(_cameraDeviceInput && ! _session.isRunning) {
+        [_session startRunning];
+        [self.scannerView.layer insertSublayer:self.previewLayer atIndex:0];
+    }
+
     // there will be a short delay when setup the timer to circulate the scanning line animation, so we need to execute the animation method once
     [self.scannerView startScanLineAnimate];
 
@@ -164,11 +251,9 @@ static CGFloat const kButtonWidthAndHeight = 35.f;
 }
 
 - (void)stopScanning {
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        if ([self.session isRunning]) {
-            [self.session stopRunning];
-        }
-    });
+    if(_cameraDeviceInput && _session.isRunning) {
+        [_session stopRunning];
+    }
 
     [self.scannerView stopScanLineAnimate];
     if(_scanTimer) {
@@ -177,53 +262,36 @@ static CGFloat const kButtonWidthAndHeight = 35.f;
     }
 }
 
-#pragma mark - Event Response -
+#pragma mark - Button Action
 - (void)clickbackButton:(UIButton *)sender {
-    [self stopScanning];
     [self.navigationController popViewControllerAnimated:YES];
 }
 
 - (void)clicklocalPhotoButton:(UIButton *)sender {
-
-    PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatus];
-    switch (status) {
-        case PHAuthorizationStatusNotDetermined:{
-            [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus status) {
-                if (status == PHAuthorizationStatusAuthorized) {
-                    dispatch_sync(dispatch_get_main_queue(), ^{
-                        [self presentViewController:self.imagePickerController animated:YES completion:nil];
-                        [self stopScanning];
-                    });
-                } else{
-                }
-            }];
-            break;
-        }
-        case PHAuthorizationStatusAuthorized: {
+    [self requestAuthorizationWithType:ScannerSourceDevicePhotoLibrary completion:^(BOOL granted) {
+        if (granted) {
             [self presentViewController:self.imagePickerController animated:YES completion:nil];
-            [self stopScanning];
         }
-            break;
-        case PHAuthorizationStatusDenied:
-        case PHAuthorizationStatusRestricted:
-            break;
-    }
+    }];
 }
 
 - (void)clicklightButton:(UIButton *)sender {
+    if (!_cameraDevice) {
+        return;
+    }
     sender.selected = !sender.selected;
-    if ([self.cameraDevice hasTorch]) {
-        [self.cameraDevice lockForConfiguration:nil];
+    if ([_cameraDevice hasTorch]) {
+        [_cameraDevice lockForConfiguration:nil];
         if (sender.selected) {
-            [self.cameraDevice setTorchMode:AVCaptureTorchModeOn];
-        }else{
-            [self.cameraDevice setTorchMode:AVCaptureTorchModeOff];
+            [_cameraDevice setTorchMode:AVCaptureTorchModeOn];
+        }else {
+            [_cameraDevice setTorchMode:AVCaptureTorchModeOff];
         }
-        [self.cameraDevice unlockForConfiguration];
+        [_cameraDevice unlockForConfiguration];
     }
 }
 
-#pragma mark - QRCodeScannerViewDelegate -
+#pragma mark - QRCodeScannerViewDelegate
 - (void)loadView:(CGRect)innerViewRect {
     CGFloat innerViewX = innerViewRect.origin.x;
     CGFloat innerViewY = innerViewRect.origin.y;
@@ -234,7 +302,7 @@ static CGFloat const kButtonWidthAndHeight = 35.f;
     [self.metadataOutput setRectOfInterest:CGRectMake(innerViewY / [UIScreen mainScreen].bounds.size.height, innerViewX / [UIScreen mainScreen].bounds.size.width, innerViewHeight / [UIScreen mainScreen].bounds.size.height, innerViewWidth / [UIScreen mainScreen].bounds.size.width)];
 }
 
-#pragma mark - AVCaptureMetadataOutputObjectsDelegate -
+#pragma mark - AVCaptureMetadataOutputObjectsDelegate
 - (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputMetadataObjects:(NSArray *)metadataObjects fromConnection:(AVCaptureConnection *)connection
 {
     if (self.isHandleResult) {
@@ -264,7 +332,7 @@ static CGFloat const kButtonWidthAndHeight = 35.f;
     }
 }
 
-#pragma mark - UIImagePickerControllerDelegate -
+#pragma mark - UIImagePickerControllerDelegate
 - (void)imagePickerController:(UIImagePickerController *)picker didFinishPickingMediaWithInfo:(NSDictionary *)info {
 
     [picker dismissViewControllerAnimated:YES completion:nil];
@@ -281,9 +349,6 @@ static CGFloat const kButtonWidthAndHeight = 35.f;
 
         UIAlertController *alerController = [UIAlertController alertControllerWithTitle:@"扫描结果" message:scanResultStr preferredStyle:UIAlertControllerStyleAlert];
         UIAlertAction *alertAction = [UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                [self.session startRunning];
-            });
             self.handleResult = NO;
         }];
         [alerController addAction:alertAction];
@@ -295,11 +360,7 @@ static CGFloat const kButtonWidthAndHeight = 35.f;
     } else {
         // there is not QR code on the photo
         UIAlertController *alerController = [UIAlertController alertControllerWithTitle:nil message:@"识别不到二维码" preferredStyle:UIAlertControllerStyleAlert];
-        UIAlertAction *alertAction = [UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                [self.session startRunning];
-            });
-        }];
+        UIAlertAction *alertAction = [UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil];
         [alerController addAction:alertAction];
         [self.navigationController presentViewController:alerController animated:YES completion:nil];
     }
@@ -307,14 +368,10 @@ static CGFloat const kButtonWidthAndHeight = 35.f;
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
     [picker dismissViewControllerAnimated:YES completion:nil];
-
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        [self.session startRunning];
-    });
 }
 
 
-#pragma mark - Getter -
+#pragma mark - Getter
 - (UIButton *)backButton {
     if (!_backButton) {
         _backButton = [UIButton buttonWithType:UIButtonTypeCustom];
